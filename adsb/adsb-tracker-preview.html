@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ADS-B Tracker</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #0a0d10;
+    --panel: #11161b;
+    --panel-2: #161c22;
+    --border: #1f262d;
+    --text: #e6ebf0;
+    --muted: #6b7681;
+    --accent: #7dd3fc;
+    --warn: #fbbf24;
+    --danger: #ef4444;
+    --ok: #4ade80;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --sans: 'Inter Tight', system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------------- LAYOUT ---------------- */
+  .app {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    grid-template-rows: 48px 1fr;
+    height: 100vh;
+  }
+
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    position: relative;
+    z-index: 10;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+  }
+
+  .brand .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    box-shadow: 0 0 8px var(--ok);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .status {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+  }
+
+  .status span { color: var(--text); }
+
+  /* ---------------- MAP ---------------- */
+  #map {
+    background: #050709;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Dark theme overrides for Leaflet */
+  .leaflet-container { background: #050709; outline: none; }
+  .leaflet-control-attribution {
+    background: rgba(10, 13, 16, 0.7) !important;
+    color: var(--muted) !important;
+    font-family: var(--mono) !important;
+    font-size: 9px !important;
+  }
+  .leaflet-control-attribution a { color: var(--muted) !important; }
+  .leaflet-control-zoom a {
+    background: var(--panel) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+  }
+
+  /* Aircraft markers */
+  .ac-marker {
+    background: transparent;
+    border: none;
+  }
+  .ac-icon {
+    width: 14px;
+    height: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s;
+  }
+  .ac-icon svg { width: 100%; height: 100%; }
+  .ac-icon.normal { color: var(--accent); }
+  .ac-icon.warn { color: var(--warn); }
+  .ac-icon.danger { color: var(--danger); filter: drop-shadow(0 0 6px var(--danger)); }
+  .ac-icon.danger { animation: alert 1.2s ease-in-out infinite; }
+  @keyframes alert {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.3); }
+  }
+
+  /* Popup */
+  .leaflet-popup-content-wrapper {
+    background: var(--panel) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 4px !important;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6) !important;
+  }
+  .leaflet-popup-tip { background: var(--panel) !important; }
+  .leaflet-popup-content { margin: 12px 14px !important; font-family: var(--mono); font-size: 11px; }
+  .leaflet-popup-content b { color: var(--accent); }
+
+  /* ---------------- SIDEBAR ---------------- */
+  aside {
+    border-left: 1px solid var(--border);
+    background: var(--panel);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sidebar-header {
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-header h2 {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  .stat-cell .label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .stat-cell .val {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 500;
+    line-height: 1;
+  }
+  .stat-cell .val.warn { color: var(--warn); }
+  .stat-cell .val.danger { color: var(--danger); }
+
+  .alerts {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+  }
+
+  .alerts h3 {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: var(--muted);
+    text-transform: uppercase;
+    padding: 4px 8px;
+    margin-bottom: 8px;
+  }
+
+  .alert-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--warn);
+    padding: 10px 12px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-family: var(--mono);
+  }
+  .alert-card:hover { background: #1b2229; }
+  .alert-card.high { border-left-color: var(--danger); }
+
+  .alert-card .head {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .alert-card .id { font-size: 11px; font-weight: 700; }
+  .alert-card .level {
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    color: var(--warn);
+    text-transform: uppercase;
+  }
+  .alert-card.high .level { color: var(--danger); }
+
+  .alert-card .meta {
+    font-size: 10px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+
+  .alert-card .flags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .alert-card .flag {
+    font-size: 9px;
+    background: #1f262d;
+    padding: 2px 6px;
+    border-radius: 2px;
+    letter-spacing: 0.05em;
+  }
+
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 40px 20px;
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2a323a; }
+
+  /* Mobile fallback */
+  @media (max-width: 800px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: 48px 1fr 280px; }
+    aside { border-left: none; border-top: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <div class="brand">
+      <span class="dot"></span>
+      <span>ADS-B Tracker</span>
+    </div>
+    <div class="status">
+      <span id="last-update">--:--:--</span>
+      &nbsp;·&nbsp;
+      <span id="refresh-info">--s</span>
+    </div>
+  </header>
+
+  <main>
+    <div id="map"></div>
+  </main>
+
+  <aside>
+    <div class="sidebar-header">
+      <h2>Situation</h2>
+      <div class="stats">
+        <div class="stat-cell">
+          <div class="label">Tracks</div>
+          <div class="val" id="stat-total">0</div>
+        </div>
+        <div class="stat-cell">
+          <div class="label">Flagged</div>
+          <div class="val warn" id="stat-flagged">0</div>
+        </div>
+        <div class="stat-cell">
+          <div class="label">Critical</div>
+          <div class="val danger" id="stat-critical">0</div>
+        </div>
+      </div>
+    </div>
+    <div class="alerts">
+      <h3>Anomalies</h3>
+      <div id="alert-list">
+        <div class="empty">No anomalies detected</div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// -----------------------------------------------------------------------------
+// MAP SETUP
+// -----------------------------------------------------------------------------
+const map = L.map('map', {
+  zoomControl: true,
+  attributionControl: true,
+}).setView([60.0, 10.75], 7);
+
+// Dark tile layer from CartoDB
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO &copy; OpenSky',
+  subdomains: 'abcd',
+  maxZoom: 19
+}).addTo(map);
+
+// Labels on top
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png', {
+  subdomains: 'abcd',
+  maxZoom: 19,
+  pane: 'shadowPane',
+}).addTo(map);
+
+// Holds active markers keyed by aircraft ID
+const markers = new Map();
+
+// -----------------------------------------------------------------------------
+// AIRCRAFT ICON (a rotated triangle)
+// -----------------------------------------------------------------------------
+function aircraftIcon(rotation, level) {
+  const html = `
+    <div class="ac-icon ${level}" style="transform: rotate(${rotation}deg)">
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2 L18 20 L12 16 L6 20 Z"/>
+      </svg>
+    </div>`;
+  return L.divIcon({
+    className: 'ac-marker',
+    html: html,
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+  });
+}
+
+function suspicionLevel(score) {
+  if (score >= 2) return 'danger';
+  if (score >= 1) return 'warn';
+  return 'normal';
+}
+
+// -----------------------------------------------------------------------------
+// POPUP CONTENT
+// -----------------------------------------------------------------------------
+function popupHtml(ac) {
+  const cs = (ac.callsign || '').trim() || 'UNKNOWN';
+  const alt = ac.baro_altitude != null ? `${Math.round(ac.baro_altitude)} m` : '--';
+  const vel = ac.velocity != null ? `${Math.round(ac.velocity)} m/s` : '--';
+  const hdg = ac.true_track != null ? `${Math.round(ac.true_track)}°` : '--';
+  const flags = ac.flags.length
+    ? ac.flags.map(f => `<span style="color:var(--warn)">⚠ ${f}</span>`).join('<br>')
+    : '<span style="color:var(--ok)">✓ Nominal</span>';
+  return `
+    <b>${cs}</b><br>
+    <span style="color:var(--muted)">${ac.icao24}</span><br>
+    ALT ${alt} · SPD ${vel} · HDG ${hdg}<br>
+    <span style="color:var(--muted)">${ac.origin_country || ''}</span><br>
+    <hr style="border:0;border-top:1px solid var(--border);margin:6px 0">
+    ${flags}
+  `;
+}
+
+// -----------------------------------------------------------------------------
+// REFRESH AIRCRAFT
+// -----------------------------------------------------------------------------
+async function refresh() {
+  try {
+    const res = await fetch('/api/aircraft');
+    const data = await res.json();
+
+    document.getElementById('refresh-info').textContent = `${data.refresh_interval}s cycle`;
+
+    if (data.error) {
+      console.error('Server error:', data.error);
+    }
+
+    const aircraft = data.aircraft || [];
+    const seen = new Set();
+
+    // Update / create markers
+    for (const ac of aircraft) {
+      seen.add(ac.icao24);
+      const level = suspicionLevel(ac.suspicion);
+      const rotation = ac.true_track || 0;
+      const latlng = [ac.latitude, ac.longitude];
+
+      let m = markers.get(ac.icao24);
+      if (m) {
+        m.setLatLng(latlng);
+        m.setIcon(aircraftIcon(rotation, level));
+        m.getPopup()?.setContent(popupHtml(ac));
+      } else {
+        m = L.marker(latlng, { icon: aircraftIcon(rotation, level) })
+          .bindPopup(popupHtml(ac))
+          .addTo(map);
+        markers.set(ac.icao24, m);
+      }
+    }
+
+    // Remove markers for aircraft no longer in view
+    for (const [id, m] of markers) {
+      if (!seen.has(id)) {
+        map.removeLayer(m);
+        markers.delete(id);
+      }
+    }
+
+    // Update stats
+    const flagged = aircraft.filter(a => a.suspicion > 0);
+    const critical = aircraft.filter(a => a.suspicion >= 2);
+    document.getElementById('stat-total').textContent = aircraft.length;
+    document.getElementById('stat-flagged').textContent = flagged.length;
+    document.getElementById('stat-critical').textContent = critical.length;
+
+    // Update alert list
+    const list = document.getElementById('alert-list');
+    if (flagged.length === 0) {
+      list.innerHTML = '<div class="empty">No anomalies detected</div>';
+    } else {
+      // sort by suspicion desc
+      flagged.sort((a, b) => b.suspicion - a.suspicion);
+      list.innerHTML = flagged.map(ac => {
+        const cs = (ac.callsign || '').trim() || 'NO CALLSIGN';
+        const alt = ac.baro_altitude != null ? `${Math.round(ac.baro_altitude)}m` : '--';
+        const vel = ac.velocity != null ? `${Math.round(ac.velocity)}m/s` : '--';
+        const highClass = ac.suspicion >= 2 ? 'high' : '';
+        const levelText = ac.suspicion >= 2 ? 'Critical' : 'Caution';
+        return `
+          <div class="alert-card ${highClass}" data-id="${ac.icao24}"
+               data-lat="${ac.latitude}" data-lng="${ac.longitude}">
+            <div class="head">
+              <span class="id">${cs}</span>
+              <span class="level">${levelText}</span>
+            </div>
+            <div class="meta">${ac.icao24} · ${alt} · ${vel}</div>
+            <div class="flags">
+              ${ac.flags.map(f => `<span class="flag">${f}</span>`).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      // Click alert to fly to that aircraft
+      list.querySelectorAll('.alert-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const lat = parseFloat(card.dataset.lat);
+          const lng = parseFloat(card.dataset.lng);
+          const id = card.dataset.id;
+          map.setView([lat, lng], 11);
+          markers.get(id)?.openPopup();
+        });
+      });
+    }
+
+    // Timestamp
+    if (data.updated_at) {
+      const d = new Date(data.updated_at * 1000);
+      const t = d.toTimeString().slice(0, 8);
+      document.getElementById('last-update').textContent = t + ' UTC';
+    }
+  } catch (e) {
+    console.error('Refresh failed:', e);
+  }
+}
+
+// First load + repeat
+refresh();
+setInterval(refresh, 5000);  // poll our own backend every 5s
+</script>
+
+<script>
+// Override fetch with a mock so the static preview shows aircraft
+window.__realFetch = window.fetch;
+window.fetch = async function(url) {
+  if (url.includes('/api/aircraft')) {
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      json: async () => ({
+        refresh_interval: 2,
+        source: 'demo',
+        updated_at: now,
+        error: null,
+        bbox: {lamin: 58.0, lamax: 62.0, lomin: 8.0, lomax: 13.0},
+        aircraft: [
+          // Normal airliners
+          {icao24: 'sim123abc', callsign: 'SAS451', origin_country: 'Norway', latitude: 60.2, longitude: 10.8, baro_altitude: 9500, velocity: 240, true_track: 45, suspicion: 0, flags: []},
+          {icao24: 'sim456def', callsign: 'DY631', origin_country: 'Norway', latitude: 59.7, longitude: 10.5, baro_altitude: 11000, velocity: 250, true_track: 180, suspicion: 0, flags: []},
+          {icao24: 'sim789ghi', callsign: 'BAW778', origin_country: 'UK', latitude: 60.9, longitude: 11.5, baro_altitude: 10500, velocity: 235, true_track: 270, suspicion: 0, flags: []},
+          {icao24: 'simjkl012', callsign: 'KLM1149', origin_country: 'Netherlands', latitude: 58.5, longitude: 9.2, baro_altitude: 9800, velocity: 225, true_track: 90, suspicion: 0, flags: []},
+          {icao24: 'simmno345', callsign: 'DLH8810', origin_country: 'Germany', latitude: 61.2, longitude: 12.1, baro_altitude: 11500, velocity: 248, true_track: 200, suspicion: 0, flags: []},
+          // Loiterer (caution - yellow)
+          {icao24: 'simpqr678', callsign: 'RECON1', origin_country: 'Norway', latitude: 60.0, longitude: 10.75, baro_altitude: 450, velocity: 55, true_track: 135, suspicion: 1, flags: ['Erratic heading']},
+          // Drones (critical - red)
+          {icao24: 'simstu901', callsign: '', origin_country: 'Unknown', latitude: 59.95, longitude: 10.7, baro_altitude: 110, velocity: 18, true_track: 250, suspicion: 3, flags: ['Low altitude', 'Slow speed', 'No callsign']},
+          {icao24: 'simvwx234', callsign: '', origin_country: 'Unknown', latitude: 60.4, longitude: 11.2, baro_altitude: 95, velocity: 22, true_track: 60, suspicion: 3, flags: ['Low altitude', 'Slow speed', 'No callsign']},
+        ]
+      })
+    };
+  }
+  return window.__realFetch(url);
+};
+</script>
+</body>
+</html>
